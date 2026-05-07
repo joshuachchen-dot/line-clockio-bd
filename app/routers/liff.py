@@ -8,10 +8,16 @@ from pydantic import BaseModel, Field
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, joinedload
 
+from app.services.overtime import (
+    MONTHLY_OT_LIMIT,
+    compute_monthly_summaries,
+    monthly_ot_total,
+)
+
 from app.config import get_settings
 from app.database import get_db
 from app.models.check_in import CheckIn, CheckInType
-from app.models.employee import Employee
+from app.models.employee import CARD_NUMBER_RE, Employee
 from app.models.makeup_request import MakeupRequest, MakeupRequestStatus
 
 router = APIRouter(tags=["liff"])
@@ -100,6 +106,11 @@ class MakeupReviewPayload(BaseModel):
     action: str  # "approve" or "reject"
 
 
+class UpdateCardRequest(BaseModel):
+    id_token: str
+    card_number: str = Field(..., min_length=8, max_length=8, pattern=CARD_NUMBER_RE.pattern)
+
+
 # ── Routes ─────────────────────────────────────────────────────────────────────
 
 @router.get("/liff/")
@@ -158,6 +169,7 @@ async def liff_status(
         "display_name": employee.display_name or employee.full_name or employee.email,
         "is_manager": employee.is_manager,
         "pending_makeup_count": pending_count,
+        "card_number": employee.card_number,
     }
 
 
@@ -167,7 +179,7 @@ async def liff_records(
     db: Session = Depends(get_db),
     _: None = Depends(_require_liff),
 ):
-    """Return this month's attendance records for the authenticated employee."""
+    """Return this month's daily attendance summaries with overtime calculation."""
     settings = get_settings()
     line_user_id = await _verify_line_token(payload.id_token, settings.liff_channel_id)
     employee = _get_employee(db, line_user_id)
@@ -182,22 +194,38 @@ async def liff_records(
             CheckIn.employee_id == employee.id,
             CheckIn.checked_at >= month_start,
         )
-        .order_by(CheckIn.checked_at.desc())
-        .limit(200)
+        .order_by(CheckIn.checked_at)
+        .limit(1000)
         .all()
     )
 
+    weekday_labels = ["一", "二", "三", "四", "五", "六", "日"]
+    summaries = compute_monthly_summaries(records, tz)
+    total_ot = monthly_ot_total(summaries)
+
+    def _fmt(dt: datetime | None) -> str | None:
+        return dt.astimezone(tz).strftime("%H:%M") if dt else None
+
     return {
         "month": now.strftime("%Y年%m月"),
+        "total_ot_counted_minutes": total_ot,
+        "exceeds_monthly_limit": total_ot > MONTHLY_OT_LIMIT,
         "records": [
             {
-                "type": r.type.value,
-                "type_label": "上班" if r.type == CheckInType.clock_in else "下班",
-                "time": r.checked_at.astimezone(tz).strftime("%m/%d %H:%M"),
-                "date": r.checked_at.astimezone(tz).strftime("%m/%d"),
-                "weekday": ["一","二","三","四","五","六","日"][r.checked_at.astimezone(tz).weekday()],
+                "date": s.date.strftime("%m/%d"),
+                "weekday": weekday_labels[s.date.weekday()],
+                "clock_in": _fmt(s.clock_in),
+                "clock_out": _fmt(s.clock_out),
+                "work_minutes": s.work_minutes,
+                "regular_minutes": s.regular_minutes,
+                "ot_tier1_minutes": s.ot_tier1_minutes,
+                "ot_tier2_minutes": s.ot_tier2_minutes,
+                "ot_counted_minutes": s.ot_counted_minutes,
+                "ot_remainder_minutes": s.ot_remainder_minutes,
+                "in_progress": s.in_progress,
+                "exceeds_legal_limit": s.exceeds_legal_limit,
             }
-            for r in records
+            for s in summaries
         ],
     }
 
@@ -436,3 +464,35 @@ async def liff_makeup_review(
 
     db.commit()
     return {"success": True, "message": msg}
+
+
+# ── Card number ────────────────────────────────────────────────────────────────
+
+@router.post("/liff/update_card")
+async def liff_update_card(
+    payload: UpdateCardRequest,
+    db: Session = Depends(get_db),
+    _: None = Depends(_require_liff),
+):
+    """Employee saves or updates their 8-character punch card number."""
+    settings = get_settings()
+    line_user_id = await _verify_line_token(payload.id_token, settings.liff_channel_id)
+    employee = _get_employee(db, line_user_id)
+
+    card = payload.card_number.upper()
+
+    conflict = db.query(Employee).filter(
+        Employee.card_number == card,
+        Employee.id != employee.id,
+    ).first()
+    if conflict:
+        raise HTTPException(status_code=409, detail="此卡號已被其他員工使用，請確認後重新輸入。")
+
+    employee.card_number = card
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="此卡號已被其他員工使用，請確認後重新輸入。")
+
+    return {"success": True, "card_number": card}

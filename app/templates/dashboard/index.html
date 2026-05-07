@@ -38,13 +38,23 @@
   </div>
 </form>
 
-{# ── Export button ── #}
+{# ── Export buttons ── #}
+{% set qs_parts = [] %}
+{% if filters.employee_id %}{% set _ = qs_parts.append("employee_id=" ~ filters.employee_id) %}{% endif %}
+{% if filters.date_from %}{% set _ = qs_parts.append("date_from=" ~ filters.date_from) %}{% endif %}
+{% if filters.date_to %}{% set _ = qs_parts.append("date_to=" ~ filters.date_to) %}{% endif %}
+{% set qs = qs_parts | join("&") %}
 <div class="d-flex justify-content-between align-items-center mb-2">
   <span class="text-muted small">共 {{ check_ins|length }} 筆（最多顯示 500 筆）</span>
-  <a href="/dashboard/export?{% if filters.employee_id %}employee_id={{ filters.employee_id }}&{% endif %}{% if filters.date_from %}date_from={{ filters.date_from }}&{% endif %}{% if filters.date_to %}date_to={{ filters.date_to }}{% endif %}"
-     class="btn btn-outline-success btn-sm">
-    匯出 CSV（稽核用）
-  </a>
+  <div class="d-flex gap-2">
+    <a href="/dashboard/export?{{ qs }}" class="btn btn-outline-success btn-sm">
+      匯出 CSV（稽核用）
+    </a>
+    <a href="/dashboard/export/factory?{{ qs }}" class="btn btn-outline-primary btn-sm"
+       title="未設定員工卡號的員工不會出現在此匯出檔中">
+      匯出打卡機格式（.txt）
+    </a>
+  </div>
 </div>
 
 {# ── Records table ── #}

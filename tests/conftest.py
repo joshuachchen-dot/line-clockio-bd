@@ -20,6 +20,7 @@ os.environ.setdefault("MAILGUN_API_KEY", "test-mailgun-key")
 os.environ.setdefault("MAILGUN_FROM_EMAIL", "noreply@test.example.com")
 os.environ.setdefault("SESSION_SECRET_KEY", "test-session-secret-key-32-chars!")
 os.environ.setdefault("APP_BASE_URL", "http://localhost:8000")
+os.environ.setdefault("INTERNAL_SECRET", "test-internal-secret")
 
 import pytest  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
@@ -41,7 +42,7 @@ def db():
         yield session
     finally:
         session.close()
-        Base.metadata.drop_all(engine)
+        engine.dispose()  # reset pool before drop_all (rollback tests may leave pool in detached state)
 
 
 @pytest.fixture

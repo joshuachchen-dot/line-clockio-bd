@@ -217,7 +217,7 @@ def test_records_returns_month_label(client, db):
 
 
 def test_records_includes_checkin_entries(client, db):
-    """Records lists this month's check-in events with correct shape."""
+    """Records returns daily summaries with overtime fields."""
     emp = _add_employee(db)
     now_utc = datetime.now(timezone.utc)
     _add_checkin(db, emp.id, CheckInType.clock_in, now_utc)
@@ -228,14 +228,18 @@ def test_records_includes_checkin_entries(client, db):
         resp = client.post("/liff/records", json={"id_token": "tok"})
 
     assert resp.status_code == 200
-    records = resp.json()["records"]
+    body = resp.json()
+    assert "total_ot_counted_minutes" in body
+    assert "exceeds_monthly_limit" in body
+    records = body["records"]
     assert len(records) == 1
     r = records[0]
-    assert r["type"] == "clock_in"
-    assert r["type_label"] == "上班"
     assert "date" in r
     assert "weekday" in r
-    assert "time" in r
+    assert "clock_in" in r
+    assert "clock_out" in r
+    assert "ot_counted_minutes" in r
+    assert r["in_progress"] is True   # only clock_in, no clock_out
 
 
 def test_records_403_for_unbound_user(db):
@@ -605,3 +609,100 @@ def test_checkin_clock_out_without_clock_in_returns_422(client, db):
 
     assert resp.status_code == 422
     assert "上班打卡" in resp.json()["detail"]
+
+
+# ── POST /liff/update_card ────────────────────────────────────────────────────
+
+def test_update_card_sets_card_number(client, db):
+    """Employee can set their card number via LIFF."""
+    _add_employee(db)
+    settings = _mock_settings_liff()
+
+    with patch("app.routers.liff.get_settings", return_value=settings), \
+         patch("app.routers.liff._verify_line_token", new_callable=AsyncMock, return_value=LINE_UID):
+        resp = client.post("/liff/update_card", json={"id_token": "tok", "card_number": "A1234567"})
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["success"] is True
+    assert body["card_number"] == "A1234567"
+
+    emp = db.query(Employee).filter(Employee.line_user_id == LINE_UID).first()
+    assert emp.card_number == "A1234567"
+
+
+def test_update_card_uppercases_input(client, db):
+    """Card number is stored uppercase regardless of input case."""
+    _add_employee(db)
+    settings = _mock_settings_liff()
+
+    with patch("app.routers.liff.get_settings", return_value=settings), \
+         patch("app.routers.liff._verify_line_token", new_callable=AsyncMock, return_value=LINE_UID):
+        resp = client.post("/liff/update_card", json={"id_token": "tok", "card_number": "ab123456"})
+
+    assert resp.status_code == 200
+    assert resp.json()["card_number"] == "AB123456"
+
+
+def test_update_card_conflict_returns_409(client, db):
+    """Card number already held by another employee returns 409."""
+    _add_employee(db)
+    # A second employee already holds the target card number
+    other = Employee(
+        email="other@aiotek.com.tw",
+        line_user_id="Uother",
+        card_number="TAKEN123",
+        is_active=True,
+    )
+    db.add(other)
+    db.flush()  # keep session transaction open so the same connection is reused
+
+    settings = _mock_settings_liff()
+    with patch("app.routers.liff.get_settings", return_value=settings), \
+         patch("app.routers.liff._verify_line_token", new_callable=AsyncMock, return_value=LINE_UID):
+        resp = client.post("/liff/update_card", json={"id_token": "tok", "card_number": "TAKEN123"})
+
+    assert resp.status_code == 409
+    assert "已被其他員工使用" in resp.json()["detail"]
+
+
+def test_update_card_self_update_allowed(client, db):
+    """Employee can re-submit the same card number they already own (idempotent)."""
+    emp = _add_employee(db)
+    emp.card_number = "MINE1234"
+    db.flush()  # keep session transaction open so the same connection is reused
+
+    settings = _mock_settings_liff()
+    with patch("app.routers.liff.get_settings", return_value=settings), \
+         patch("app.routers.liff._verify_line_token", new_callable=AsyncMock, return_value=LINE_UID):
+        resp = client.post("/liff/update_card", json={"id_token": "tok", "card_number": "MINE1234"})
+
+    assert resp.status_code == 200
+    assert resp.json()["card_number"] == "MINE1234"
+
+
+def test_update_card_invalid_format_rejected(client, db):
+    """Card numbers that don't match 8 alphanumeric chars are rejected by Pydantic."""
+    _add_employee(db)
+    settings = _mock_settings_liff()
+
+    with patch("app.routers.liff.get_settings", return_value=settings), \
+         patch("app.routers.liff._verify_line_token", new_callable=AsyncMock, return_value=LINE_UID):
+        resp = client.post("/liff/update_card", json={"id_token": "tok", "card_number": "SHORT"})
+
+    assert resp.status_code == 422
+
+
+def test_update_card_status_includes_card_number(client, db):
+    """After setting card number, /liff/status reflects it."""
+    emp = _add_employee(db)
+    emp.card_number = "CARD1234"
+    db.flush()  # keep session transaction open so the same connection is reused
+
+    settings = _mock_settings_liff()
+    with patch("app.routers.liff.get_settings", return_value=settings), \
+         patch("app.routers.liff._verify_line_token", new_callable=AsyncMock, return_value=LINE_UID):
+        resp = client.post("/liff/status", json={"id_token": "tok"})
+
+    assert resp.status_code == 200
+    assert resp.json()["card_number"] == "CARD1234"

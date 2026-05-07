@@ -11,13 +11,14 @@ from zoneinfo import ZoneInfo
 
 import httpx
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, contains_eager
 
 from app.config import get_settings
 from app.database import get_db
 from app.models.check_in import CheckIn, CheckInType
 from app.models.email_verification import EmailVerification
-from app.models.employee import Employee
+from app.models.employee import CARD_NUMBER_RE, Employee
 from app.services.mailgun import send_otp_email
 
 router = APIRouter(tags=["webhook"])
@@ -82,6 +83,10 @@ async def webhook(
                 await _handle_otp_verification(db, line_user_id, text, reply_token)
             elif text.lower().startswith("query "):
                 await _handle_query(db, line_user_id, text[6:].strip(), reply_token)
+            elif CARD_NUMBER_RE.fullmatch(text):
+                await _handle_card_number(db, line_user_id, text.upper(), reply_token)
+            elif text in ("略過", "跳過", "skip"):
+                await _handle_skip(db, line_user_id, reply_token)
         except Exception:
             logger.exception("Error processing event %s", event.get("webhookEventId", ""))
 
@@ -92,22 +97,33 @@ async def webhook(
 
 async def _handle_follow(db: Session, line_user_id: str, reply_token: str) -> None:
     """Send onboarding instructions when an employee adds the bot as a friend."""
-    # If already bound, greet them instead of repeating the onboarding
-    if db.query(Employee).filter(
+    # If already bound, greet them — remind about card number if not yet set
+    existing = db.query(Employee).filter(
         Employee.line_user_id == line_user_id,
         Employee.is_active.is_(True),
-    ).first():
-        await _reply_text(reply_token, "歡迎回來！請使用下方選單進行打卡。")
+    ).first()
+    if existing:
+        if not existing.card_number:
+            await _reply_text(
+                reply_token,
+                "歡迎回來！\n\n"
+                "您尚未設定員工卡號，請傳送 8 位數卡號完成設定（例：01234567）。\n"
+                "卡號印在您的識別證或由 HR 提供。\n\n"
+                "若無卡號請傳送「略過」。",
+            )
+        else:
+            await _reply_text(reply_token, "歡迎回來！請使用下方選單進行打卡。")
         return
 
     await _reply_text(
         reply_token,
         "👋 歡迎使用 Aiotek 打卡系統！\n\n"
-        "請依照以下步驟完成帳號綁定：\n\n"
+        "請依照以下步驟完成帳號設定：\n\n"
         "1️⃣ 直接傳送您的公司 Email（例：name@aiotek.com.tw）\n"
         "2️⃣ 系統將寄出 6 位數驗證碼至您的信箱\n"
-        "3️⃣ 在此回傳驗證碼即完成綁定\n\n"
-        "綁定完成後即可使用下方選單上下班打卡。",
+        "3️⃣ 在此回傳驗證碼完成 Email 綁定\n"
+        "4️⃣ 傳送您的 8 位數員工卡號（例：01234567）\n\n"
+        "完成後即可使用下方選單上下班打卡。",
     )
 
 
@@ -250,8 +266,66 @@ async def _handle_otp_verification(
     db.commit()
     await _reply_text(
         reply_token,
-        "✅ 綁定完成！您現在可以開始打卡。\n請點選選單中的「上班打卡」或「下班打卡」。",
+        "✅ 帳號綁定完成！\n\n"
+        "最後一步：請傳送您的 8 位數員工卡號（例：01234567）\n"
+        "卡號印在您的識別證或由 HR 提供。\n\n"
+        "若目前沒有卡號，請傳送「略過」，之後可隨時在打卡應用程式的個人資料中設定。",
     )
+
+
+# ── Card number setup ─────────────────────────────────────────────────────────
+
+async def _handle_card_number(db: Session, line_user_id: str, card_number: str, reply_token: str) -> None:
+    employee = db.query(Employee).filter(
+        Employee.line_user_id == line_user_id,
+        Employee.is_active.is_(True),
+    ).first()
+    if not employee:
+        await _reply_text(reply_token, "請先完成帳號綁定後再設定卡號。")
+        return
+
+    # Already has a card number — block silent overwrite; direct to LIFF profile instead.
+    if employee.card_number:
+        await _reply_text(
+            reply_token,
+            f"您目前的員工卡號為：{employee.card_number}\n\n"
+            "如需變更卡號，請至打卡應用程式的「個人資料」頁面進行修改。",
+        )
+        return
+
+    conflict = db.query(Employee).filter(
+        Employee.card_number == card_number,
+        Employee.id != employee.id,
+    ).first()
+    if conflict:
+        await _reply_text(reply_token, "此卡號已被其他員工使用，請確認後重新輸入。")
+        return
+
+    employee.card_number = card_number
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        await _reply_text(reply_token, "此卡號已被其他員工使用，請確認後重新輸入。")
+        return
+    await _reply_text(
+        reply_token,
+        f"✅ 員工卡號已設定為：{card_number}\n\n您現在可以開始使用打卡系統了！",
+    )
+
+
+async def _handle_skip(db: Session, line_user_id: str, reply_token: str) -> None:
+    employee = db.query(Employee).filter(
+        Employee.line_user_id == line_user_id,
+        Employee.is_active.is_(True),
+    ).first()
+    if employee:
+        await _reply_text(
+            reply_token,
+            "已略過卡號設定。您可隨時開啟打卡應用程式，在個人資料頁面補充卡號。",
+        )
+    else:
+        await _reply_text(reply_token, "請先完成帳號綁定。請傳送您的公司 Email 開始設定。")
 
 
 # ── Manager LINE query ────────────────────────────────────────────────────────

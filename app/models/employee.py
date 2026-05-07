@@ -1,13 +1,17 @@
 from __future__ import annotations
 
 import datetime
+import re
 from typing import TYPE_CHECKING, List, Optional
 
-from sqlalchemy import String, Boolean, DateTime
+from sqlalchemy import Boolean, DateTime, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.sql import func
 
 from app.database import Base
+
+# Single source of truth for card number format — imported by routers and webhook
+CARD_NUMBER_RE = re.compile(r'^[0-9A-Za-z]{8}$')
 
 if TYPE_CHECKING:
     from app.models.check_in import CheckIn
@@ -21,6 +25,7 @@ class Employee(Base):
     # UNIQUE + nullable: PostgreSQL (our target DB) allows multiple NULL values in a
     # UNIQUE column (NULL ≠ NULL per SQL standard), so this is safe.
     employee_number: Mapped[Optional[str]] = mapped_column(String(20), unique=True, nullable=True, index=True)
+    card_number: Mapped[Optional[str]] = mapped_column(String(8), unique=True, nullable=True, index=True)
     full_name: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     # LINE UID — NULL when HR pre-loads record before employee completes binding
     line_user_id: Mapped[Optional[str]] = mapped_column(String(50), unique=True, nullable=True, index=True)

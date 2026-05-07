@@ -12,6 +12,7 @@ from app.models.check_in import CheckIn, CheckInType
 from app.models.email_verification import EmailVerification
 from app.models.employee import Employee
 from app.routers.webhook import (
+    _handle_card_number,
     _handle_email_submission,
     _handle_follow,
     _handle_otp_verification,
@@ -353,3 +354,60 @@ async def test_follow_already_bound_sends_welcome_back(db):
     assert "歡迎" in reply
     # Should NOT re-show onboarding instructions
     assert "驗證碼" not in reply
+
+
+# ── _handle_card_number ───────────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_card_number_sets_for_unset_employee(db):
+    """An employee without a card number can set one via LINE message."""
+    db.add(Employee(email=EMAIL, line_user_id=LINE_UID, is_active=True))
+    db.commit()
+
+    with patch("app.routers.webhook._reply_text", new_callable=AsyncMock) as mock_reply:
+        await _handle_card_number(db, LINE_UID, "A1234567", TOKEN)
+
+    emp = db.query(Employee).filter(Employee.line_user_id == LINE_UID).first()
+    assert emp.card_number == "A1234567"
+    assert "✅" in mock_reply.call_args[0][1]
+
+
+@pytest.mark.asyncio
+async def test_card_number_blocks_overwrite_when_already_set(db):
+    """Employee with an existing card number cannot overwrite it via LINE — directed to LIFF."""
+    db.add(Employee(email=EMAIL, line_user_id=LINE_UID, card_number="OLD12345", is_active=True))
+    db.commit()
+
+    with patch("app.routers.webhook._reply_text", new_callable=AsyncMock) as mock_reply:
+        await _handle_card_number(db, LINE_UID, "NEW12345", TOKEN)
+
+    emp = db.query(Employee).filter(Employee.line_user_id == LINE_UID).first()
+    # Card number must NOT be changed
+    assert emp.card_number == "OLD12345"
+    reply = mock_reply.call_args[0][1]
+    assert "OLD12345" in reply
+    assert "個人資料" in reply
+
+
+@pytest.mark.asyncio
+async def test_card_number_conflict_with_other_employee(db):
+    """Card number already held by another employee → conflict reply, no change."""
+    db.add(Employee(email=EMAIL, line_user_id=LINE_UID, is_active=True))
+    db.add(Employee(email="other@aiotek.com.tw", line_user_id="Uother", card_number="TAKEN123", is_active=True))
+    db.commit()
+
+    with patch("app.routers.webhook._reply_text", new_callable=AsyncMock) as mock_reply:
+        await _handle_card_number(db, LINE_UID, "TAKEN123", TOKEN)
+
+    emp = db.query(Employee).filter(Employee.line_user_id == LINE_UID).first()
+    assert emp.card_number is None
+    assert "已被其他員工使用" in mock_reply.call_args[0][1]
+
+
+@pytest.mark.asyncio
+async def test_card_number_unbound_user_gets_error(db):
+    """User with no bound employee record cannot set a card number."""
+    with patch("app.routers.webhook._reply_text", new_callable=AsyncMock) as mock_reply:
+        await _handle_card_number(db, "Ughost", "A1234567", TOKEN)
+
+    assert "帳號綁定" in mock_reply.call_args[0][1]

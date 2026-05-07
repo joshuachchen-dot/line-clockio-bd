@@ -19,7 +19,7 @@
 <div class="card card-body mb-4 p-3">
   <p class="fw-semibold mb-2 small">HR 批次匯入員工資料</p>
   <p class="text-muted small mb-2">
-    上傳 CSV 檔（欄位：員工編號、姓名、Email）。新員工將自動收到邀請信；已存在的紀錄僅更新員編與姓名。
+    上傳 CSV 檔（欄位：員工編號、姓名、Email、員工卡號）。新員工將自動收到邀請信；已存在的紀錄僅更新員編、姓名與卡號。
   </p>
   <form method="post" action="/dashboard/import" enctype="multipart/form-data"
         class="d-flex gap-2 align-items-center">
@@ -37,6 +37,7 @@
         <th>員工編號</th>
         <th>姓名</th>
         <th>Email</th>
+        <th>員工卡號</th>
         <th>LINE 顯示名稱</th>
         <th>綁定狀態</th>
         <th>管理員</th>
@@ -49,6 +50,7 @@
         <td class="text-muted">{{ emp.employee_number or "—" }}</td>
         <td>{{ emp.full_name or "—" }}</td>
         <td class="small">{{ emp.email }}</td>
+        <td class="small font-monospace text-muted">{{ emp.card_number or "—" }}</td>
         <td class="small text-muted">{{ emp.display_name or "—" }}</td>
         <td>
           {% if emp.line_user_id %}
