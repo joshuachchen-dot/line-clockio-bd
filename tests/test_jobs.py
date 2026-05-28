@@ -11,7 +11,7 @@ from app.models.employee import Employee
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 _SECRET = "test-internal-secret"
-_AUTH = f"Bearer {_SECRET}"
+_AUTH_HEADER = {"X-Internal-Secret": _SECRET}
 
 
 def _mock_settings(secret: str = _SECRET) -> MagicMock:
@@ -67,7 +67,7 @@ def test_job_wrong_secret_returns_401(client):
     with patch("app.routers.jobs.get_settings", return_value=_mock_settings()):
         resp = client.post(
             "/internal/jobs/factory_export",
-            headers={"Authorization": "Bearer wrong-secret"},
+            headers={"X-Internal-Secret": "wrong-secret"},
         )
     assert resp.status_code == 401
 
@@ -77,7 +77,7 @@ def test_job_no_secret_configured_returns_500(client):
     with patch("app.routers.jobs.get_settings", return_value=settings):
         resp = client.post(
             "/internal/jobs/factory_export",
-            headers={"Authorization": _AUTH},
+            headers=_AUTH_HEADER,
         )
     assert resp.status_code == 500
 
@@ -103,7 +103,7 @@ def test_job_uploads_yesterdays_records(client, db):
 
         resp = client.post(
             "/internal/jobs/factory_export",
-            headers={"Authorization": _AUTH},
+            headers=_AUTH_HEADER,
         )
 
     assert resp.status_code == 200
@@ -131,7 +131,7 @@ def test_job_excludes_employees_without_card(client, db):
 
         resp = client.post(
             "/internal/jobs/factory_export",
-            headers={"Authorization": _AUTH},
+            headers=_AUTH_HEADER,
         )
 
     assert resp.status_code == 200
@@ -156,7 +156,7 @@ def test_job_ftp_failure_returns_502(client, db):
 
         resp = client.post(
             "/internal/jobs/factory_export",
-            headers={"Authorization": _AUTH},
+            headers=_AUTH_HEADER,
         )
 
     assert resp.status_code == 502

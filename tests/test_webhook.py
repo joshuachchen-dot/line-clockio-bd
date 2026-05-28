@@ -17,6 +17,7 @@ from app.routers.webhook import (
     _handle_follow,
     _handle_otp_verification,
     _handle_query,
+    _handle_skip,
     _hash_otp,
     _verify_signature,
 )
@@ -409,5 +410,28 @@ async def test_card_number_unbound_user_gets_error(db):
     """User with no bound employee record cannot set a card number."""
     with patch("app.routers.webhook._reply_text", new_callable=AsyncMock) as mock_reply:
         await _handle_card_number(db, "Ughost", "A1234567", TOKEN)
+
+    assert "帳號綁定" in mock_reply.call_args[0][1]
+
+
+# ── _handle_skip ──────────────────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_skip_bound_employee_gets_confirmation(db):
+    """Bound employee who skips card setup receives a confirmation message."""
+    db.add(Employee(email=EMAIL, line_user_id=LINE_UID, is_active=True))
+    db.commit()
+
+    with patch("app.routers.webhook._reply_text", new_callable=AsyncMock) as mock_reply:
+        await _handle_skip(db, LINE_UID, TOKEN)
+
+    assert "略過" in mock_reply.call_args[0][1]
+
+
+@pytest.mark.asyncio
+async def test_skip_unbound_user_gets_bind_prompt(db):
+    """User with no employee record is told to complete binding first."""
+    with patch("app.routers.webhook._reply_text", new_callable=AsyncMock) as mock_reply:
+        await _handle_skip(db, "Ughost", TOKEN)
 
     assert "帳號綁定" in mock_reply.call_args[0][1]

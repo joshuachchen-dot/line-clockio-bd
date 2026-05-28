@@ -28,7 +28,7 @@ gcloud run deploy "${SERVICE}" \
   --memory 512Mi \
   --cpu 1 \
   --timeout 60 \
-  --add-cloudsql-instances "${PROJECT_ID}:${REGION}:line-clockio-db-new" \
+  --set-cloudsql-instances "${PROJECT_ID}:${REGION}:line-clockio-db-new" \
   --set-env-vars "DEBUG=${DEBUG:-false}" \
   --set-secrets "\
 LINE_CHANNEL_ACCESS_TOKEN=LINE_CHANNEL_ACCESS_TOKEN:latest,\

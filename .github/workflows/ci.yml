@@ -74,4 +74,5 @@ jobs:
             --source . \
             --region asia-east1 \
             --project=aiotek-bot \
+            --set-cloudsql-instances=aiotek-bot:asia-east1:line-clockio-db-new \
             --quiet
