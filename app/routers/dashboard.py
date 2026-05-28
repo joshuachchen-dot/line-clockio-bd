@@ -14,9 +14,8 @@ from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
 from pydantic import BeforeValidator
 from fastapi.responses import RedirectResponse, StreamingResponse
 from fastapi.templating import Jinja2Templates
-from sqlalchemy.orm import Session
-
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session
 
 from app.config import get_settings
 from app.database import get_db
