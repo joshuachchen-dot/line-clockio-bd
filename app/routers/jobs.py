@@ -1,6 +1,7 @@
 """Internal job endpoints — triggered by Cloud Scheduler, not exposed to end users."""
 from __future__ import annotations
 
+import hmac
 import logging
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
@@ -12,20 +13,19 @@ from app.config import get_settings
 from app.database import get_db
 from app.models.check_in import CheckIn
 from app.models.employee import Employee
-from app.routers.dashboard import _build_checkin_query
-from app.services.ftp_export import upload_factory_file
+from app.services.checkin_query import build_checkin_query
+from app.services.ftp_export import build_factory_lines, upload_factory_file
 
 router = APIRouter(prefix="/internal", tags=["internal"])
 logger = logging.getLogger(__name__)
 
 
-def _require_internal(authorization: str = Header(default="")):
-    """Validate the Bearer token sent by Cloud Scheduler."""
+def _require_internal(x_internal_secret: str = Header(default="")):
+    """Validate the secret token sent by Cloud Scheduler."""
     secret = get_settings().internal_secret
     if not secret:
         raise HTTPException(status_code=500, detail="Internal secret not configured.")
-    expected = f"Bearer {secret}"
-    if authorization != expected:
+    if not hmac.compare_digest(x_internal_secret, secret):
         raise HTTPException(status_code=401, detail="Unauthorized.")
 
 
@@ -50,22 +50,13 @@ async def job_factory_export(
     date_str = yesterday.strftime("%Y-%m-%d")
 
     check_ins = (
-        _build_checkin_query(db, tz, employee_id=None, date_from=date_str, date_to=date_str)
+        build_checkin_query(db, tz, employee_id=None, date_from=date_str, date_to=date_str)
         .filter(Employee.card_number.isnot(None))
         .order_by(CheckIn.checked_at.asc())
         .all()
     )
 
-    machine_id = settings.factory_machine_id
-    lines: list[str] = []
-    for ci in check_ins:
-        local_dt = ci.checked_at.astimezone(tz)
-        lines.append(
-            f"{machine_id},"
-            f"{ci.employee.card_number},"
-            f"{local_dt.strftime('%Y/%m/%d')},"
-            f"{local_dt.strftime('%H:%M:%S')}"
-        )
+    lines = build_factory_lines(check_ins, settings.factory_machine_id, tz)
 
     # Empty files are intentional — factory FTP system expects one file per day
     # regardless of whether anyone punched in. Do not add a len(lines)==0 skip guard.

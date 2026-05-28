@@ -5,21 +5,24 @@ import io
 import logging
 import secrets
 from datetime import datetime
+from typing import Annotated
 from urllib.parse import quote, urlencode
 from zoneinfo import ZoneInfo
 
 import httpx
 from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
+from pydantic import BeforeValidator
 from fastapi.responses import RedirectResponse, StreamingResponse
 from fastapi.templating import Jinja2Templates
-from sqlalchemy.orm import Session, contains_eager
-
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session
 
 from app.config import get_settings
 from app.database import get_db
 from app.models.check_in import CheckIn, CheckInType
 from app.models.employee import CARD_NUMBER_RE, Employee
+from app.services.checkin_query import build_checkin_query
+from app.services.ftp_export import build_factory_lines
 from app.services.mailgun import send_invitation_email
 
 router = APIRouter(prefix="/dashboard", tags=["dashboard"])
@@ -30,6 +33,9 @@ _LINE_AUTH_URL = "https://access.line.me/oauth2/v2.1/authorize"
 _LINE_TOKEN_URL = "https://api.line.me/oauth2/v2.1/token"
 _LINE_VERIFY_URL = "https://api.line.me/oauth2/v2.1/verify"
 _MAX_IMPORT_BYTES = 5 * 1024 * 1024  # 5 MB
+
+# HTML forms send "" for unselected optional int fields; treat that as None.
+_OptIntQ = Annotated[int | None, BeforeValidator(lambda v: None if v == "" else v)]
 
 
 def _redirect_uri() -> str:
@@ -58,39 +64,6 @@ def _csv_safe(value: str | None) -> str:
     """Prevent CSV formula injection for Excel (prefix dangerous leading chars with ')."""
     s = "" if value is None else str(value)
     return ("'" + s) if s and s[0] in ("=", "+", "-", "@", "\t", "\r") else s
-
-
-def _build_checkin_query(
-    db: Session,
-    tz: ZoneInfo,
-    employee_id: int | None,
-    date_from: str | None,
-    date_to: str | None,
-):
-    """Build a filtered CheckIn query — shared by the list view and CSV export."""
-    query = (
-        db.query(CheckIn)
-        .join(CheckIn.employee)
-        .filter(Employee.is_active.is_(True))
-        .options(contains_eager(CheckIn.employee))
-    )
-    if employee_id:
-        query = query.filter(CheckIn.employee_id == employee_id)
-    if date_from:
-        try:
-            dt_from = datetime.strptime(date_from, "%Y-%m-%d").replace(tzinfo=tz)
-            query = query.filter(CheckIn.checked_at >= dt_from)
-        except ValueError:
-            pass
-    if date_to:
-        try:
-            dt_to = datetime.strptime(date_to, "%Y-%m-%d").replace(
-                hour=23, minute=59, second=59, tzinfo=tz
-            )
-            query = query.filter(CheckIn.checked_at <= dt_to)
-        except ValueError:
-            pass
-    return query
 
 
 # ── Auth ──────────────────────────────────────────────────────────────────────
@@ -196,7 +169,7 @@ async def logout(request: Request):
 async def dashboard_home(
     request: Request,
     db: Session = Depends(get_db),
-    employee_id: int | None = None,
+    employee_id: _OptIntQ = None,
     date_from: str | None = None,
     date_to: str | None = None,
 ):
@@ -214,7 +187,7 @@ async def dashboard_home(
     )
 
     check_ins = (
-        _build_checkin_query(db, tz, employee_id, date_from, date_to)
+        build_checkin_query(db, tz, employee_id, date_from, date_to)
         .order_by(CheckIn.checked_at.desc())
         .limit(500)
         .all()
@@ -242,7 +215,7 @@ async def dashboard_home(
 async def export_csv(
     request: Request,
     db: Session = Depends(get_db),
-    employee_id: int | None = None,
+    employee_id: _OptIntQ = None,
     date_from: str | None = None,
     date_to: str | None = None,
 ):
@@ -253,7 +226,7 @@ async def export_csv(
     tz = ZoneInfo(settings.timezone)
 
     check_ins = (
-        _build_checkin_query(db, tz, employee_id, date_from, date_to)
+        build_checkin_query(db, tz, employee_id, date_from, date_to)
         .order_by(CheckIn.checked_at.asc())
         .all()
     )
@@ -452,7 +425,7 @@ async def resend_invite(
 async def export_factory(
     request: Request,
     db: Session = Depends(get_db),
-    employee_id: int | None = None,
+    employee_id: _OptIntQ = None,
     date_from: str | None = None,
     date_to: str | None = None,
 ):
@@ -468,24 +441,13 @@ async def export_factory(
     date_to = date_to or today
 
     check_ins = (
-        _build_checkin_query(db, tz, employee_id, date_from, date_to)
+        build_checkin_query(db, tz, employee_id, date_from, date_to)
         .filter(Employee.card_number.isnot(None))
         .order_by(CheckIn.checked_at.asc())
         .all()
     )
 
-    machine_id = settings.factory_machine_id
-    lines: list[str] = []
-    for ci in check_ins:
-        emp = ci.employee
-        local_dt = ci.checked_at.astimezone(tz)
-        lines.append(
-            f"{machine_id},"
-            f"{emp.card_number},"
-            f"{local_dt.strftime('%Y/%m/%d')},"
-            f"{local_dt.strftime('%H:%M:%S')}"
-        )
-
+    lines = build_factory_lines(check_ins, settings.factory_machine_id, tz)
     content = "\n".join(lines) + ("\n" if lines else "")
     filename = f"factory_{datetime.now(tz).strftime('%Y%m%d_%H%M%S')}.txt"
     return StreamingResponse(

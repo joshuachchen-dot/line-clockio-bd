@@ -28,7 +28,7 @@ gcloud run deploy "${SERVICE}" \
   --memory 512Mi \
   --cpu 1 \
   --timeout 60 \
-  --add-cloudsql-instances "${PROJECT_ID}:${REGION}:line-clockio-db" \
+  --set-cloudsql-instances "${PROJECT_ID}:${REGION}:line-clockio-db-new" \
   --set-env-vars "DEBUG=${DEBUG:-false}" \
   --set-secrets "\
 LINE_CHANNEL_ACCESS_TOKEN=LINE_CHANNEL_ACCESS_TOKEN:latest,\
@@ -40,7 +40,11 @@ DATABASE_URL=DATABASE_URL:latest,\
 MAILGUN_API_KEY=MAILGUN_API_KEY:latest,\
 MAILGUN_FROM_EMAIL=MAILGUN_FROM_EMAIL:latest,\
 SESSION_SECRET_KEY=SESSION_SECRET_KEY:latest,\
-APP_BASE_URL=APP_BASE_URL:latest"
+APP_BASE_URL=APP_BASE_URL:latest,\
+FTP_USER=FTP_USER:latest,\
+FTP_PASSWORD=FTP_PASSWORD:latest,\
+FTP_REMOTE_DIR=FTP_REMOTE_DIR:latest,\
+INTERNAL_SECRET=INTERNAL_SECRET:latest"
 
 echo "==> Setting public access policy..."
 gcloud beta run services add-iam-policy-binding "${SERVICE}" \
