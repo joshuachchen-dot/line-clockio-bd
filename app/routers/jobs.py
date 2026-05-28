@@ -19,13 +19,12 @@ router = APIRouter(prefix="/internal", tags=["internal"])
 logger = logging.getLogger(__name__)
 
 
-def _require_internal(authorization: str = Header(default="")):
-    """Validate the Bearer token sent by Cloud Scheduler."""
+def _require_internal(x_internal_secret: str = Header(default="")):
+    """Validate the secret token sent by Cloud Scheduler."""
     secret = get_settings().internal_secret
     if not secret:
         raise HTTPException(status_code=500, detail="Internal secret not configured.")
-    expected = f"Bearer {secret}"
-    if authorization != expected:
+    if x_internal_secret != secret:
         raise HTTPException(status_code=401, detail="Unauthorized.")
 
 

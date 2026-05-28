@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
 import httpx
@@ -120,6 +120,7 @@ async def liff_page(request: Request):
         request,
         "liff/checkin.html",
         {"liff_id": settings.liff_id, "app_base_url": settings.app_base_url},
+        headers={"Cache-Control": "no-store"},
     )
 
 
@@ -249,9 +250,10 @@ async def liff_checkin(
 
     tz = ZoneInfo(settings.timezone)
 
+    today_start = _today_start_utc(tz)
+
     # Clock-out requires a clock-in on the same calendar day
     if checkin_type == CheckInType.clock_out:
-        today_start = _today_start_utc(tz)
         if not db.query(CheckIn).filter(
             CheckIn.employee_id == employee.id,
             CheckIn.type == CheckInType.clock_in,
@@ -259,17 +261,14 @@ async def liff_checkin(
         ).first():
             raise HTTPException(status_code=422, detail="今日尚未上班打卡，請先完成上班打卡。")
 
-    # Duplicate check-in prevention: same type within 2-hour window
-    two_hours_ago = datetime.now(timezone.utc) - timedelta(hours=2)
+    # Prevent the same punch type from being recorded twice on the same calendar day
     if db.query(CheckIn).filter(
         CheckIn.employee_id == employee.id,
         CheckIn.type == checkin_type,
-        CheckIn.checked_at > two_hours_ago,
+        CheckIn.checked_at >= today_start,
     ).first():
-        raise HTTPException(
-            status_code=409,
-            detail=f"Duplicate: a {payload.type} was already recorded within the last 2 hours.",
-        )
+        label = "上班" if checkin_type == CheckInType.clock_in else "下班"
+        raise HTTPException(status_code=409, detail=f"今日已完成{label}打卡，無法重複打卡。")
 
     forwarded = request.headers.get("X-Forwarded-For")
     ip_address = (

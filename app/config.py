@@ -28,7 +28,7 @@ class Settings(BaseSettings):
     session_secret_key: str
     app_base_url: str
     timezone: str = "Asia/Taipei"
-    factory_machine_id: str = "0000000005"
+    factory_machine_id: str = "0000000002"
 
     # Factory FTP export
     ftp_host: str = "61.219.81.20"

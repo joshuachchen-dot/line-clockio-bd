@@ -5,11 +5,13 @@ import io
 import logging
 import secrets
 from datetime import datetime
+from typing import Annotated
 from urllib.parse import quote, urlencode
 from zoneinfo import ZoneInfo
 
 import httpx
 from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
+from pydantic import BeforeValidator
 from fastapi.responses import RedirectResponse, StreamingResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session, contains_eager
@@ -30,6 +32,9 @@ _LINE_AUTH_URL = "https://access.line.me/oauth2/v2.1/authorize"
 _LINE_TOKEN_URL = "https://api.line.me/oauth2/v2.1/token"
 _LINE_VERIFY_URL = "https://api.line.me/oauth2/v2.1/verify"
 _MAX_IMPORT_BYTES = 5 * 1024 * 1024  # 5 MB
+
+# HTML forms send "" for unselected optional int fields; treat that as None.
+_OptIntQ = Annotated[int | None, BeforeValidator(lambda v: None if v == "" else v)]
 
 
 def _redirect_uri() -> str:
@@ -196,7 +201,7 @@ async def logout(request: Request):
 async def dashboard_home(
     request: Request,
     db: Session = Depends(get_db),
-    employee_id: int | None = None,
+    employee_id: _OptIntQ = None,
     date_from: str | None = None,
     date_to: str | None = None,
 ):
@@ -242,7 +247,7 @@ async def dashboard_home(
 async def export_csv(
     request: Request,
     db: Session = Depends(get_db),
-    employee_id: int | None = None,
+    employee_id: _OptIntQ = None,
     date_from: str | None = None,
     date_to: str | None = None,
 ):
@@ -452,7 +457,7 @@ async def resend_invite(
 async def export_factory(
     request: Request,
     db: Session = Depends(get_db),
-    employee_id: int | None = None,
+    employee_id: _OptIntQ = None,
     date_from: str | None = None,
     date_to: str | None = None,
 ):

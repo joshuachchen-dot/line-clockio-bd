@@ -20,6 +20,8 @@ def upload_factory_file(
     with ftplib.FTP(host, timeout=30) as ftp:
         ftp.login(user, password)
         if remote_dir and remote_dir != "/":
-            ftp.cwd(remote_dir)
+            # Windows FTP servers use CP950 (Traditional Chinese); sending UTF-8 causes 451 error
+            ftp.sock.sendall(f"CWD {remote_dir}\r\n".encode("cp950"))
+            ftp.getresp()
         ftp.storbinary(f"STOR {filename}", io.BytesIO(content))
     logger.info("Factory FTP upload complete: %s → %s:%s", filename, host, remote_dir)
